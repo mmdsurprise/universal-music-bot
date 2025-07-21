@@ -1,204 +1,120 @@
-import os
-import json
-import requests
-import yt_dlp
-import logging
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import (
-    ApplicationBuilder, MessageHandler, filters, CommandHandler,
-    CallbackContext, ContextTypes
-)
+import os import aiohttp from dotenv import load_dotenv from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup from telegram.constants import ParseMode from telegram.ext import ( ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters )
 
-# مشخصات شما (به صورت ثابت وارد شده)
-BOT_TOKEN = '6429471851:AAGBPIRyoT-WvsY0H7HkmH0wtpDFwlt1Ggo'
-ADMIN_ID = 6201054084
-ACR_KEY = '0376a4412cd5c60c7695cd7b4e390c20'
-AUDD_KEY = '2df291d1793a3943db4d1d60e3e0f7c2'
-GPT_KEY = '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'
+شناسایی آهنگ از منابع مختلف
 
-CHANNEL_ID = "@suprisemusic"
-CACHE_FILE = "used.json"
-USAGE_LIMIT = 5
+from utils.recognize import recognize_with_audd from utils.shazam import recognize_with_shazam from utils.google_search import recognize_with_google from utils.deezer import recognize_with_deezer from utils.muzikaz import recognize_with_muzikaz from utils.anghami import search_anghami from utils.fizy import search_fizy
 
-# ------------------------- راه‌اندازی لاگ‌ها -----------------------------
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+موتورهای جست‌وجو
 
-# ------------------------- ابزارها -----------------------------
-def is_user_member(user_id):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember?chat_id={CHANNEL_ID}&user_id={user_id}"
-    response = requests.get(url).json()
-    status = response.get("result", {}).get("status", "")
-    return status in ["member", "administrator", "creator"]
+from utils.bing_search import bing_search from utils.ddg_search import ddg_search from utils.yahoo_search import yahoo_search from utils.yep_search import yep_search from utils.ask_search import ask_search from utils.metamind_search import metamind_search
 
-def load_usage():
-    if not os.path.exists(CACHE_FILE):
-        return {}
-    with open(CACHE_FILE, "r") as f:
-        return json.load(f)
+دانلود آهنگ
 
-def save_usage(usage):
-    with open(CACHE_FILE, "w") as f:
-        json.dump(usage, f)
+from utils.downloader import download_audio_from_link
 
-def check_duplicate(file_id):
-    if os.path.exists("cache.json"):
-        with open("cache.json", "r") as f:
-            data = json.load(f)
-    else:
-        data = []
+load_dotenv() BOT_TOKEN = os.getenv("BOT_TOKEN") CHANNEL_ID = os.getenv("CHANNEL_ID") or "@suprisemusic" CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME") or "suprisemusic"
 
-    if file_id in data:
-        return True
-    data.append(file_id)
-    with open("cache.json", "w") as f:
-        json.dump(data, f)
-    return False
+application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# ------------------------- جستجو با ChatGPT/AI -----------------------------
-def search_song_google_ai(query):
-    headers = {
-        "Authorization": f"Bearer {GPT_KEY}",
-        "Content-Type": "application/json"
-    }
-    prompt = f"""I received this audio query from a user: '{query}'. Search Google or song databases and tell me the name of the song, artist, and provide a YouTube or download link if possible."""
-    data = {
-        "model": "gpt-4",
-        "messages": [
-            {"role": "user", "content": prompt}
-        ]
-    }
-    res = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data)
+پیام‌های خوش‌آمد
+
+welcome_messages = { "fa": "سلام به ربات آهنگ‌یاب بین‌المللی خوش اومدی 🎧\n\nبرای استفاده از ربات، کافیه یه تیکه از آهنگ یا ویس یا کلیپ اون رو بفرستی تا من کاملش رو برات پیدا کنم.\n\n🔒 قبل از استفاده لطفاً اول در کانال ما عضو شو.", "en": "Welcome to the International Music Finder Bot 🎧\n\nTo use the bot, just send me a voice or a part of the song and I’ll find the full version for you.\n\n🔒 Before using, please make sure you have joined our channel.", "tr": "Uluslararası Müzik Bulucu Botuna hoş geldiniz 🎧\n\nBotu kullanmak için sadece şarkının bir kısmını veya ses kaydını gönderin, ben sizin için tam halini bulurum.\n\n🔒 Devam etmeden önce lütfen kanalımıza katılın.", "ar": "مرحبًا بك في روبوت البحث عن الأغاني الدولي 🎧\n\nلاستخدام الروبوت، فقط أرسل جزءًا من الأغنية أو رسالة صوتية وسأجد النسخة الكاملة لك.\n\n🔒 قبل الاستخدام، تأكد من أنك انضممت إلى قناتنا." }
+
+keyboard_labels = { "fa": "✅ بررسی عضویت", "en": "✅ Check Membership", "tr": "✅ Üyeliği Kontrol Et", "ar": "✅ التحقق من العضوية" }
+
+دستور استارت
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE): user_lang = update.effective_user.language_code or "en" message = welcome_messages.get(user_lang, welcome_messages["en"]) button_text = keyboard_labels.get(user_lang, keyboard_labels["en"]) keyboard = InlineKeyboardMarkup([ [InlineKeyboardButton("🔗 عضویت در کانال", url="https://t.me/suprisemusic")], [InlineKeyboardButton(button_text, callback_data="check_membership")] ]) await update.message.reply_text(message, reply_markup=keyboard)
+
+بررسی عضویت
+
+async def check_membership_callback(update: Update, context: ContextTypes.DEFAULT_TYPE): query = update.callback_query await query.answer() user_id = query.from_user.id try: member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id) if member.status in ("member", "administrator", "creator"): await query.edit_message_text( text="✅ عضویتت تایید شد! حالا می‌تونی از ربات استفاده کنی. فقط کافیه تیکه آهنگ، ویس یا کلیپت رو بفرستی 🎵" ) else: keyboard = InlineKeyboardMarkup([ [InlineKeyboardButton("🔗 عضویت در کانال", url="https://t.me/suprisemusic")], [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")] ]) await query.message.reply_text( "❌ عضویت شما تایید نشد. لطفاً ابتدا در کانال عضو شوید و سپس دوباره دکمه بررسی عضویت را بزنید.", reply_markup=keyboard ) except Exception as e: await query.edit_message_text(text="⚠️ خطا در بررسی عضویت. لطفاً بعداً تلاش کن.") print(f"Membership check error: {e}")
+
+پردازش ویس / ویدیو
+
+async def handle_audio_video(update: Update, context: ContextTypes.DEFAULT_TYPE): message = update.message user_id = message.from_user.id file = None
+
+if message.audio:
+    file = await context.bot.get_file(message.audio.file_id)
+elif message.voice:
+    file = await context.bot.get_file(message.voice.file_id)
+elif message.video:
+    file = await context.bot.get_file(message.video.file_id)
+elif message.video_note:
+    file = await context.bot.get_file(message.video_note.file_id)
+else:
+    await message.reply_text("لطفاً ویس، آهنگ یا کلیپ تصویری ارسال کنید.")
+    return
+
+file_path = file.file_path
+downloaded_file = await file.download_as_bytearray()
+temp_filename = f"{user_id}_temp_input"
+with open(temp_filename, 'wb') as f:
+    f.write(downloaded_file)
+
+await context.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+result = recognize_with_audd(temp_filename)
+if not result:
+    result = recognize_with_shazam(temp_filename)
+if not result:
+    result = recognize_with_google(temp_filename)
+if not result:
+    result = recognize_with_deezer(temp_filename)
+if not result:
+    result = recognize_with_fizy(temp_filename)
+if not result:
+    result = recognize_with_muzikaz(temp_filename)
+if not result:
+    result = recognize_with_anghami(temp_filename)
+
+os.remove(temp_filename)
+
+if result:
+    title = result['title']
+    artist = result['artist']
+    await search_and_send_audio(title, artist, update, context)
+else:
+    await message.reply_text("❌ نتونستم آهنگ رو شناسایی کنم")
+
+بخش ارسال آهنگ
+
+async def search_and_send_audio(title, artist, update: Update, context: ContextTypes.DEFAULT_TYPE): query = f"{title} {artist} mp3 download" search_engines = [ bing_search, ddg_search, yahoo_search, yep_search, ask_search, metamind_search ]
+
+for engine in search_engines:
     try:
-        return res.json()["choices"][0]["message"]["content"]
-    except:
-        return "نتوانستم چیزی پیدا کنم."
+        link = await engine(query)
+        if link:
+            file_path = await download_audio_from_link(link, title, artist)
+            if file_path and os.path.exists(file_path):
+                with open(file_path, 'rb') as audio:
+                    sent = await context.bot.send_audio(
+                        chat_id=CHANNEL_ID,
+                        audio=audio,
+                        caption=f"🎵 {title} - {artist}",
+                        parse_mode=ParseMode.HTML
+                    )
+                os.remove(file_path)
 
-# ------------------------- دانلود از یوتیوب -----------------------------
-def download_song_from_youtube(query, filename="output.mp3"):
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": filename,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192"
-        }],
-        "quiet": True
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch:{query}", download=True)
-            return filename
+                message_id = sent.message_id
+                post_link = f"https://t.me/{CHANNEL_USERNAME}/{message_id}"
+                await update.message.reply_text(
+                    f"✅ آهنگ با موفقیت در کانال آپلود شد.\n📥 لینک دانلود:\n{post_link}"
+                )
+                return
     except Exception as e:
-        logger.error(f"Download failed: {e}")
-        return None
+        print(f"❌ خطا در موتور {engine.__name__}: {e}")
+        continue
 
-# ------------------------- تشخیص آهنگ -----------------------------
-def identify_song_acr(file_path):
-    with open(file_path, 'rb') as f:
-        files = {'file': f}
-        data = {'api_token': ACR_KEY}
-        response = requests.post('https://api.acrcloud.com/v1/identify', files=files, data=data)
-    result = response.json()
-    try:
-        return result['metadata']['music'][0]
-    except:
-        return None
+await update.message.reply_text("❌ متاسفانه نتونستم آهنگ رو پیدا کنم. لطفاً دوباره امتحان کن.")
 
-def identify_song_audd(file_path):
-    with open(file_path, 'rb') as f:
-        response = requests.post('https://api.audd.io/', data={'api_token': AUDD_KEY, 'return': 'apple_music,spotify'}, files={'file': f})
-    result = response.json()
-    try:
-        return result['result']
-    except:
-        return None
+پیام متفرقه
 
-# ------------------------- کنترل پیام ها -----------------------------
-async def start(update: Update, context: CallbackContext):
-    user = update.effective_user
-    usage = load_usage()
-    usage[str(user.id)] = 0
-    save_usage(usage)
+async def unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("متوجه نشدم چی گفتی. لطفاً آهنگ، ویس یا اسم خواننده بفرست 🎵")
 
-    # زبان کاربر
-    lang = user.language_code or "en"
-    greetings = {
-        "fa": f"سلام {user.first_name} عزیز 🌟\nبرای دریافت آهنگ، وویس یا ویدیو بفرست.",
-        "en": f"Hello {user.first_name}! 🎵\nSend a voice, audio or video file to identify and get the song.",
-    }
+افزودن هندلرها
 
-    # پیام خوش‌آمدگویی
-    msg = greetings.get(lang, greetings["en"])
-    await update.message.reply_text(msg)
+application.add_handler(CommandHandler("start", start)) application.add_handler(CallbackQueryHandler(check_membership_callback, pattern="check_membership")) application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.VIDEO | filters.VIDEO_NOTE, handle_audio_video)) application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
 
-    # ارسال اطلاعات به ادمین
-    info = f"👤 New User:\nID: {user.id}\nName: {user.full_name}\nLang: {lang}"
-    await context.bot.send_message(chat_id=ADMIN_ID, text=info)
+print("🤖 Bot is running...") application.run_polling()
 
-async def stats(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    usage = load_usage()
-    await update.message.reply_text(f"👥 Total Users: {len(usage)}")
-
-async def handle_media(update: Update, context: CallbackContext):
-    user = update.effective_user
-    chat_id = user.id
-
-    if not is_user_member(chat_id):
-        btn = InlineKeyboardMarkup([[InlineKeyboardButton("عضویت در کانال", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")]])
-        await update.message.reply_text("برای استفاده از ربات ابتدا در کانال عضو شوید:", reply_markup=btn)
-        return
-
-    usage = load_usage()
-    count = usage.get(str(chat_id), 0)
-    if count >= USAGE_LIMIT:
-        await update.message.reply_text("⛔️ سقف استفاده روزانه شما پر شده است.")
-        return
-
-    file = update.message.voice or update.message.audio or update.message.video
-    if not file:
-        await update.message.reply_text("فایل پشتیبانی نشده.")
-        return
-
-    file_id = file.file_id
-    if check_duplicate(file_id):
-        await update.message.reply_text("این فایل قبلاً ارسال شده است.")
-        return
-
-    file_path = f"{chat_id}_{file_id}.mp3"
-    await file.get_file().download_to_drive(file_path)
-
-    result = identify_song_acr(file_path) or identify_song_audd(file_path)
-
-    if result:
-        title = result.get("title") or "Unknown"
-        artist = result.get("artist") or "Unknown"
-        query = f"{title} {artist}"
-        mp3_file = download_song_from_youtube(query)
-        if not mp3_file:
-            result_text = search_song_google_ai(query)
-            await update.message.reply_text(f"🔍 AI Search Result:\n{result_text}")
-            return
-    else:
-        await update.message.reply_text("تشخیص ممکن نشد. تلاش با هوش مصنوعی...")
-        result_text = search_song_google_ai("نامشخص")
-        await update.message.reply_text(f"🔍 AI Search Result:\n{result_text}")
-        return
-
-    sent = await context.bot.send_audio(chat_id=CHANNEL_ID, audio=open(mp3_file, "rb"), caption=f"{title} - {artist}")
-    post_link = f"https://t.me/{CHANNEL_ID.lstrip('@')}/{sent.message_id}"
-    await update.message.reply_text(f"✅ آهنگ با موفقیت ارسال شد!\n📎 [دریافت در کانال]({post_link})", parse_mode="Markdown")
-
-    usage[str(chat_id)] = count + 1
-    save_usage(usage)
-    os.remove(file_path)
-
-# ------------------------- اجرای ربات -----------------------------
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.VIDEO, handle_media))
-app.run_polling()
